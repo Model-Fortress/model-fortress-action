@@ -1,0 +1,7 @@
+Model Fortress GitHub Action
+
+Copyright (c) Model Fortress / Car Dynamics Ltd. All rights reserved.
+
+Use of this Action is governed by your Model Fortress subscription agreement. Replace
+this file with the license you intend to publish under before listing on the GitHub
+Marketplace (the Marketplace requires a LICENSE in the repository).

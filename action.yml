@@ -1,0 +1,142 @@
+name: "Model Fortress"
+description: "Scan & red-team your AI models in CI and fail the build on a policy-gate breach. Publishes SARIF to the Security tab."
+author: "Model Fortress"
+
+branding:
+  icon: "shield"
+  color: "orange"
+
+inputs:
+  api-base:
+    description: "Your instance's API base URL, e.g. https://app.au2mait.com/api"
+    required: true
+  token:
+    description: "A Model Fortress Personal Access Token"
+    required: true
+  tenant:
+    description: "Your tenant id"
+    required: true
+  model-id:
+    description: "The registered model to test"
+    required: true
+  scan:
+    description: "Run a static scan"
+    required: false
+    default: "true"
+  scan-tool:
+    description: "Scanner: modelscan | modelaudit | picklescan | gguf-scan"
+    required: false
+    default: "modelscan"
+  redteam:
+    description: "Also run a red-team assessment"
+    required: false
+    default: "false"
+  probes:
+    description: "Comma-separated red-team probe spec, e.g. dan,encoding"
+    required: false
+    default: ""
+  generations:
+    description: "Red-team generations per probe"
+    required: false
+    default: ""
+  fail-on-gate:
+    description: "Fail the build when the policy gate is breached"
+    required: false
+    default: "true"
+  upload-sarif:
+    description: "Export SARIF and upload it to the GitHub Security tab (scan only)"
+    required: false
+    default: "true"
+  timeout:
+    description: "Max seconds to wait for a job to finish"
+    required: false
+    default: "1800"
+  python-version:
+    description: "Python used to run the CLI"
+    required: false
+    default: "3.11"
+  cli-version:
+    description: "Install this model-fortress-cli version from PyPI instead of the bundled copy"
+    required: false
+    default: ""
+  cli-source:
+    description: "Install the CLI from this pip source (path/git url) instead of the bundled copy"
+    required: false
+    default: ""
+
+outputs:
+  scan-id:
+    description: "The id of the scan that ran"
+    value: ${{ steps.scan.outputs.scan-id }}
+  run-id:
+    description: "The id of the red-team run that ran"
+    value: ${{ steps.redteam.outputs.run-id }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install mf CLI
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.cli-version }}" ]; then
+          pip install "model-fortress-cli==${{ inputs.cli-version }}"
+        elif [ -n "${{ inputs.cli-source }}" ]; then
+          pip install "${{ inputs.cli-source }}"
+        else
+          pip install "$GITHUB_ACTION_PATH/cli"
+        fi
+
+    - name: Scan + gate
+      id: scan
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        MF_API_BASE: ${{ inputs.api-base }}
+        MF_TOKEN: ${{ inputs.token }}
+        MF_TENANT: ${{ inputs.tenant }}
+      run: |
+        set -e
+        SCAN_ID=$(mf scan --model-id "${{ inputs.model-id }}" --no-wait)
+        echo "scan-id=$SCAN_ID" >> "$GITHUB_OUTPUT"
+        echo "Started scan $SCAN_ID"
+        if [ "${{ inputs.fail-on-gate }}" = "true" ]; then GATE=--gate; else GATE=--no-gate; fi
+        mf scan --scan-id "$SCAN_ID" --tool "${{ inputs.scan-tool }}" --timeout "${{ inputs.timeout }}" $GATE
+
+    - name: Export SARIF
+      if: ${{ always() && inputs.scan == 'true' && inputs.upload-sarif == 'true' && steps.scan.outputs.scan-id != '' }}
+      shell: bash
+      env:
+        MF_API_BASE: ${{ inputs.api-base }}
+        MF_TOKEN: ${{ inputs.token }}
+        MF_TENANT: ${{ inputs.tenant }}
+      run: mf export --job-id "${{ steps.scan.outputs.scan-id }}" --format sarif -o mf.sarif.json
+
+    - name: Upload SARIF to Security tab
+      if: ${{ always() && inputs.scan == 'true' && inputs.upload-sarif == 'true' && steps.scan.outputs.scan-id != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: mf.sarif.json
+
+    - name: Red-team + gate
+      id: redteam
+      if: ${{ inputs.redteam == 'true' }}
+      shell: bash
+      env:
+        MF_API_BASE: ${{ inputs.api-base }}
+        MF_TOKEN: ${{ inputs.token }}
+        MF_TENANT: ${{ inputs.tenant }}
+      run: |
+        set -e
+        if [ "${{ inputs.fail-on-gate }}" = "true" ]; then GATE=--gate; else GATE=--no-gate; fi
+        ARGS=""
+        [ -n "${{ inputs.probes }}" ] && ARGS="$ARGS --probes ${{ inputs.probes }}"
+        [ -n "${{ inputs.generations }}" ] && ARGS="$ARGS --generations ${{ inputs.generations }}"
+        RUN_ID=$(mf redteam --model-id "${{ inputs.model-id }}" --no-wait $ARGS)
+        echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+        echo "Started red-team run $RUN_ID"
+        mf redteam --run-id "$RUN_ID" --timeout "${{ inputs.timeout }}" $GATE

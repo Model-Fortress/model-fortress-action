@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "model-fortress-cli"
+version = "0.1.0"
+description = "Model Fortress CI/CD client — scan & red-team your models from a pipeline and fail the build on a policy-gate breach."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Proprietary" }
+keywords = ["model-fortress", "ai-security", "ci", "sarif", "red-teaming", "model-scanning"]
+dependencies = []  # stdlib only — runs in any CI image
+
+[project.scripts]
+mf = "mf.cli:main"
+
+[tool.setuptools]
+packages = ["mf"]
