@@ -43,6 +43,10 @@ inputs:
     description: "Fail the build when the policy gate is breached"
     required: false
     default: "true"
+  require-pass:
+    description: "Red-team only: fail if these OWASP LLM categories have findings, e.g. LLM01,LLM02 (or 'all')"
+    required: false
+    default: ""
   upload-sarif:
     description: "Export SARIF and upload it to the GitHub Security tab (scan only)"
     required: false
@@ -139,4 +143,6 @@ runs:
         RUN_ID=$(mf redteam --model-id "${{ inputs.model-id }}" --no-wait $ARGS)
         echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
         echo "Started red-team run $RUN_ID"
-        mf redteam --run-id "$RUN_ID" --timeout "${{ inputs.timeout }}" $GATE
+        REQ=""
+        [ -n "${{ inputs.require-pass }}" ] && REQ="--require-pass ${{ inputs.require-pass }}"
+        mf redteam --run-id "$RUN_ID" --timeout "${{ inputs.timeout }}" $GATE $REQ
