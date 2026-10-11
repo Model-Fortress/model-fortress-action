@@ -63,6 +63,28 @@ def _poll(client: Client, path: str, status_key: str, terminal: set[str], timeou
     raise GateTimeout(f"timed out after {timeout}s waiting for {status_key} to finish")
 
 
+def _compliance_gate(client: Client, run_id: str, spec: str) -> int:
+    """Fail (exit 1) if any required OWASP LLM category has findings.
+    `spec` is a comma/space list of category ids (e.g. "LLM01,LLM02") or "all"."""
+    rep = client.data(client.get(f"/model-governance/llm-red-teaming/{run_id}/compliance"))
+    cats = (
+        ((rep or {}).get("frameworks") or {}).get("owasp_llm_top_10") or {}
+    ).get("categories") or []
+    want = [s.strip().upper() for s in str(spec).replace(",", " ").split() if s.strip()]
+    all_mode = want == ["ALL"]
+    failed = [
+        str(c.get("id", "")).upper()
+        for c in cats
+        if str(c.get("status")) == "failed"
+        and (all_mode or str(c.get("id", "")).upper() in want)
+    ]
+    if failed:
+        _err(f"FAIL — OWASP categories with findings: {', '.join(sorted(set(failed)))}")
+        return 1
+    _info(f"PASS — required OWASP categories clean ({spec})")
+    return 0
+
+
 def _emit_gate(args: argparse.Namespace, verdict: dict, job_id: str, kind: str) -> int:
     print(json.dumps(verdict, indent=2))
     if not getattr(args, "gate", True):
@@ -141,7 +163,10 @@ def cmd_redteam(args: argparse.Namespace) -> int:
         interval=args.poll,
     )
     verdict = c.data(c.get(f"/model-governance/llm-red-teaming/{run_id}/gate"))
-    return _emit_gate(args, verdict, str(run_id), "redteam")
+    rc = _emit_gate(args, verdict, str(run_id), "redteam")
+    if getattr(args, "require_pass", None):
+        rc = max(rc, _compliance_gate(c, str(run_id), args.require_pass))
+    return rc
 
 
 def cmd_gate(args: argparse.Namespace) -> int:
@@ -151,7 +176,10 @@ def cmd_gate(args: argparse.Namespace) -> int:
         return _emit_gate(args, v, args.scan_id, "scan")
     if args.run_id:
         v = c.data(c.get(f"/model-governance/llm-red-teaming/{args.run_id}/gate"))
-        return _emit_gate(args, v, args.run_id, "redteam")
+        rc = _emit_gate(args, v, args.run_id, "redteam")
+        if getattr(args, "require_pass", None):
+            rc = max(rc, _compliance_gate(c, args.run_id, args.require_pass))
+        return rc
     _err("provide --scan-id or --run-id")
     return 2
 
@@ -226,12 +254,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--probes", help="comma-separated probe spec, e.g. dan,encoding")
     p.add_argument("--generations", type=int, help="generations per probe")
     p.add_argument("--metadata", help="extra llm_red_teaming_metadata as a JSON string")
+    p.add_argument("--require-pass", help="fail if these OWASP LLM categories have findings, e.g. LLM01,LLM02 (or 'all')")
     p.set_defaults(func=cmd_redteam)
 
     p = sub.add_parser("gate", help="fetch the policy-gate verdict for an existing job")
     _add_common(p)
     p.add_argument("--scan-id")
     p.add_argument("--run-id")
+    p.add_argument("--require-pass", help="(run-id only) fail if these OWASP LLM categories have findings, e.g. LLM01,LLM02 (or 'all')")
     p.set_defaults(func=cmd_gate, gate=True)
 
     p = sub.add_parser("export", help="download a job's findings (SARIF/JSON/CSV/PDF)")
